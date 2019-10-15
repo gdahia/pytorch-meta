@@ -1,94 +1,204 @@
+"""Train a prototypical network."""
+import argparse
+
 import os
 import torch
-from tqdm import tqdm
+import numpy as np
 
 from torchmeta.datasets.helpers import omniglot
 from torchmeta.utils.data import BatchMetaDataLoader
 
 from model import PrototypicalNetwork
-from utils import get_prototypes, prototypical_loss, get_accuracy
+from utils import get_prototypes, prototypical_loss, get_right
 
-def train(args):
-    dataset = omniglot(args.folder, shots=args.num_shots, ways=args.num_ways,
-        shuffle=True, test_shots=15, meta_train=True, download=args.download)
-    dataloader = BatchMetaDataLoader(dataset, batch_size=args.batch_size,
-        shuffle=True, num_workers=args.num_workers)
 
-    model = PrototypicalNetwork(1, args.embedding_size,
-        hidden_size=args.hidden_size)
-    model.to(device=args.device)
-    model.train()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+def _train(args):  # pylint: disable=too-many-locals,too-many-statements
+  # load training set
+  dataset = omniglot(
+      args.folder,
+      shots=args.num_shots,
+      ways=args.train_ways,
+      shuffle=True,
+      test_shots=5,
+      meta_train=True,
+      download=args.download,
+  )
+  train = BatchMetaDataLoader(
+      dataset,
+      batch_size=args.batch_size,
+      shuffle=True,
+      num_workers=args.num_workers,
+  )
 
-    # Training loop
-    with tqdm(dataloader, total=args.num_batches) as pbar:
-        for batch_idx, batch in enumerate(pbar):
-            model.zero_grad()
+  # load validation
+  val_dataset = omniglot(
+      args.folder,
+      shots=args.num_shots,
+      ways=args.test_ways,
+      shuffle=True,
+      test_shots=5,
+      meta_val=True,
+      download=args.download,
+  )
+  val = BatchMetaDataLoader(
+      val_dataset,
+      batch_size=1,
+      shuffle=True,
+      num_workers=args.num_workers,
+  )
 
-            train_inputs, train_targets = batch['train']
-            train_inputs = train_inputs.to(device=args.device)
-            train_targets = train_targets.to(device=args.device)
-            train_embeddings = model(train_inputs)
+  model = PrototypicalNetwork(
+      1,
+      args.embedding_size,
+      hidden_size=args.hidden_size,
+  )
+  model.to(device=args.device)
+  model.train()
+  optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-            test_inputs, test_targets = batch['test']
-            test_inputs = test_inputs.to(device=args.device)
-            test_targets = test_targets.to(device=args.device)
-            test_embeddings = model(test_inputs)
+  # Training loop
+  for step, batch in enumerate(train):
+    model.zero_grad()
 
-            prototypes = get_prototypes(train_embeddings, train_targets,
-                dataset.num_classes_per_task)
-            loss = prototypical_loss(prototypes, test_embeddings, test_targets)
+    train_inputs, train_targets = batch['train']
+    train_inputs = train_inputs.to(device=args.device)
+    train_targets = train_targets.to(device=args.device)
+    train_embeddings = model(train_inputs)
 
-            loss.backward()
-            optimizer.step()
+    test_inputs, test_targets = batch['test']
+    test_inputs = test_inputs.to(device=args.device)
+    test_targets = test_targets.to(device=args.device)
+    # model.train(False)
+    # test_embeddings = model(test_inputs)
+    # model.train(True)
+    test_embeddings = model(test_inputs)
 
-            with torch.no_grad():
-                accuracy = get_accuracy(prototypes, test_embeddings, test_targets)
-                pbar.set_postfix(accuracy='{0:.4f}'.format(accuracy.item()))
+    prototypes = get_prototypes(train_embeddings, train_targets,
+                                dataset.num_classes_per_task)
+    loss = prototypical_loss(prototypes, test_embeddings, test_targets)
 
-            if batch_idx >= args.num_batches:
-                break
+    loss.backward()
+    optimizer.step()
 
-    # Save model
-    if args.output_folder is not None:
-        filename = os.path.join(args.output_folder, 'protonet_omniglot_'
-            '{0}shot_{1}way.pt'.format(args.num_shots, args.num_ways))
-        with open(filename, 'wb') as f:
-            state_dict = model.state_dict()
-            torch.save(state_dict, f)
+    if (step + 1) % 10 == 0:
+      print(f'Step {step + 1}, loss = {loss.item()}')
+
+    if (step + 1) % args.val_batches == 0:
+      model.train(False)
+
+      accuracies = []
+      for _ in range(args.val_splits):
+        total = 0
+        right = 0
+        for val_step, val_batch in enumerate(val):
+          train_inputs, train_targets = val_batch['train']
+          train_inputs = train_inputs.to(device=args.device)
+          train_targets = train_targets.to(device=args.device)
+          train_embeddings = model(train_inputs)
+
+          test_inputs, test_targets = val_batch['test']
+          test_inputs = test_inputs.to(device=args.device)
+          test_targets = test_targets.to(device=args.device)
+          test_embeddings = model(test_inputs)
+
+          prototypes = get_prototypes(train_embeddings, train_targets,
+                                      val_dataset.num_classes_per_task)
+          right += get_right(prototypes, test_embeddings, test_targets).item()
+          total += test_embeddings.shape[1]
+
+          if val_step > args.val_steps:
+            accuracies.append(right / total)
+            break
+
+      mean_acc = 100 * np.mean(accuracies)
+      std_acc = 100 * np.std(accuracies)
+      print(f'Validation accuraccy = {mean_acc:.2f}% (+/- {3*std_acc:.2f}%)')
+
+      model.train(True)
+
+  # Save model
+  if args.output_folder is not None:
+    filename = os.path.join(
+        args.output_folder, 'protonet_omniglot_'
+        '{0}shot_{1}way.pt'.format(args.num_shots, args.num_ways))
+    with open(filename, 'wb') as model_file:
+      state_dict = model.state_dict()
+      torch.save(state_dict, model_file)
+
+
+def _parse_args():
+  parser = argparse.ArgumentParser('Prototypical Networks')
+
+  parser.add_argument('folder',
+                      type=str,
+                      help='Path to the folder the data is downloaded to.')
+  parser.add_argument(
+      '--num-shots',
+      type=int,
+      default=5,
+      help='Number of examples per class (k in "k-shot", default: 5).')
+  parser.add_argument(
+      '--train-ways',
+      type=int,
+      default=60,
+      help='Number of classes per task in training (N in "N-way", default: 60).'
+  )
+  parser.add_argument(
+      '--test-ways',
+      type=int,
+      default=5,
+      help='Number of classes per task in testing (N in "N-way", default: 5).',
+  )
+
+  parser.add_argument(
+      '--embedding-size',
+      type=int,
+      default=64,
+      help='Dimension of the embedding/latent space (default: 64).')
+  parser.add_argument(
+      '--hidden-size',
+      type=int,
+      default=64,
+      help='Number of channels for each convolutional layer (default: 64).')
+
+  parser.add_argument(
+      '--output-folder',
+      type=str,
+      default=None,
+      help='Path to the output folder for saving the model (optional).')
+  parser.add_argument('--batch-size',
+                      type=int,
+                      default=1,
+                      help='Number of tasks in a mini-batch of tasks.')
+  parser.add_argument('--val-batches',
+                      type=int,
+                      default=50,
+                      help='Number of batches between validations.')
+  parser.add_argument('--val-steps',
+                      type=int,
+                      default=100,
+                      help='Number of validation steps.')
+  parser.add_argument('--val-splits',
+                      type=int,
+                      default=5,
+                      help='Number of validation splits.')
+  parser.add_argument('--num-workers',
+                      type=int,
+                      default=1,
+                      help='Number of workers for data loading (default: 1).')
+  parser.add_argument('--download',
+                      action='store_true',
+                      help='Download the Omniglot dataset in the data folder.')
+  parser.add_argument('--use-cuda',
+                      action='store_true',
+                      help='Use CUDA if available.')
+
+  args = parser.parse_args()
+  args.device = torch.device(
+      'cuda' if args.use_cuda and torch.cuda.is_available() else 'cpu')
+
+  return args
+
 
 if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser('Prototypical Networks')
-
-    parser.add_argument('folder', type=str,
-        help='Path to the folder the data is downloaded to.')
-    parser.add_argument('--num-shots', type=int, default=5,
-        help='Number of examples per class (k in "k-shot", default: 5).')
-    parser.add_argument('--num-ways', type=int, default=5,
-        help='Number of classes per task (N in "N-way", default: 5).')
-
-    parser.add_argument('--embedding-size', type=int, default=64,
-        help='Dimension of the embedding/latent space (default: 64).')
-    parser.add_argument('--hidden-size', type=int, default=64,
-        help='Number of channels for each convolutional layer (default: 64).')
-
-    parser.add_argument('--output-folder', type=str, default=None,
-        help='Path to the output folder for saving the model (optional).')
-    parser.add_argument('--batch-size', type=int, default=16,
-        help='Number of tasks in a mini-batch of tasks (default: 16).')
-    parser.add_argument('--num-batches', type=int, default=100,
-        help='Number of batches the prototypical network is trained over (default: 100).')
-    parser.add_argument('--num-workers', type=int, default=1,
-        help='Number of workers for data loading (default: 1).')
-    parser.add_argument('--download', action='store_true',
-        help='Download the Omniglot dataset in the data folder.')
-    parser.add_argument('--use-cuda', action='store_true',
-        help='Use CUDA if available.')
-
-    args = parser.parse_args()
-    args.device = torch.device('cuda' if args.use_cuda
-        and torch.cuda.is_available() else 'cpu')
-
-    train(args)
+  _train(_parse_args())
