@@ -89,6 +89,10 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
   optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
   # Training loop
+  best_lb = 0
+  best_mean = 0
+  faults = 0
+  best_params = None
   for step, batch in enumerate(train, 1):
     model.zero_grad()
 
@@ -120,14 +124,26 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
                              args.device)
       print(f'Validation accuraccy = {mean:.2f} ± {ci95:.2f}%')
 
+      # early stopping
+      lb = mean - ci95
+      if lb > best_lb or (np.isclose(lb, best_lb) and mean > best_mean):
+        print('New best')
+        best_lb = lb
+        best_mean = mean
+        best_params = model.state_dict()
+        faults = 0
+      else:
+        faults += 1
+        print(f'{faults} faults')
+        if faults >= args.patience:
+          break
+
   # Save model
   if args.output_folder is not None:
     filename = os.path.join(
         args.output_folder, 'protonet_omniglot_'
         '{0}shot_{1}way.pt'.format(args.num_shots, args.num_ways))
-    with open(filename, 'wb') as model_file:
-      state_dict = model.state_dict()
-      torch.save(state_dict, model_file)
+    torch.save(best_params, filename)
 
 
 def _parse_args():
@@ -182,6 +198,10 @@ def _parse_args():
                       type=int,
                       default=100,
                       help='Number of validation steps.')
+  parser.add_argument('--patience',
+                      type=float,
+                      default=10,
+                      help='Early stopping patience.')
   parser.add_argument('--num-workers',
                       type=int,
                       default=1,
