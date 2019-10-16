@@ -12,6 +12,7 @@ from model import PrototypicalNetwork
 from utils import get_prototypes, prototypical_loss, get_accuracy
 
 
+# TODO: remove getting dataset, get num_classes_per_task instead
 def _evaluate(model, dataset, dataloader, steps, device):
   model.train(False)
 
@@ -79,6 +80,23 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
       num_workers=args.num_workers,
   )
 
+  # load test
+  test_dataset = omniglot(
+      args.folder,
+      shots=args.num_shots,
+      ways=args.test_ways,
+      shuffle=True,
+      test_shots=5,
+      meta_test=True,
+      download=args.download,
+  )
+  test = BatchMetaDataLoader(
+      test_dataset,
+      batch_size=1,
+      shuffle=True,
+      num_workers=args.num_workers,
+  )
+
   model = PrototypicalNetwork(
       1,
       args.embedding_size,
@@ -136,7 +154,15 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
         faults += 1
         print(f'{faults} faults')
         if faults >= args.patience:
+          print('Training finished')
           break
+
+  # evaluate on test set
+  print('Testing...')
+  model.load_state_dict(best_params)
+  mean, ci95 = _evaluate(model, test_dataset, test, args.test_steps,
+                         args.device)
+  print(f'Final accuraccy = {mean:.2f} ± {ci95:.2f}%')
 
   # Save model
   if args.output_folder is not None:
@@ -198,6 +224,13 @@ def _parse_args():
                       type=int,
                       default=100,
                       help='Number of validation steps.')
+  parser.add_argument(
+      '--test-steps',
+      type=int,
+      default=10_000,
+      # TODO: replace steps here with episodes
+      # TODO: improve episode batching to accelerate evaluation?
+      help='Number of test steps.')
   parser.add_argument('--patience',
                       type=float,
                       default=10,
