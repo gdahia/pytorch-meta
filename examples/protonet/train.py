@@ -12,6 +12,38 @@ from model import PrototypicalNetwork
 from utils import get_prototypes, prototypical_loss, get_accuracy
 
 
+def _evaluate(model, dataset, dataloader, steps, device):
+  model.train(False)
+
+  accuracies = []
+  for step, batch in enumerate(dataloader, 1):
+    train_inputs, train_targets = batch['train']
+    train_inputs = train_inputs.to(device=device)
+    train_targets = train_targets.to(device=device)
+    train_embeddings = model(train_inputs)
+
+    test_inputs, test_targets = batch['test']
+    test_inputs = test_inputs.to(device=device)
+    test_targets = test_targets.to(device=device)
+    test_embeddings = model(test_inputs)
+
+    prototypes = get_prototypes(train_embeddings, train_targets,
+                                dataset.num_classes_per_task)
+    acc = get_accuracy(prototypes, test_embeddings, test_targets).item()
+    accuracies.append(acc)
+
+    if step >= steps:
+      break
+
+  model.train(True)
+
+  mean = 100 * np.mean(accuracies)
+  std = 100 * np.std(accuracies)
+  ci95 = 1.96 * std / np.sqrt(steps)
+
+  return mean, ci95
+
+
 def _train(args):  # pylint: disable=too-many-locals,too-many-statements
   # load training set
   dataset = omniglot(
@@ -84,35 +116,9 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
       print(f'Step {step}, loss = {loss.item()}')
 
     if step % args.val_batches == 0:
-      model.train(False)
-
-      # TODO: refactor validation into evaluation, receive a split (train, val, test), run on it
-      accuracies = []
-      for val_step, val_batch in enumerate(val, 1):
-        train_inputs, train_targets = val_batch['train']
-        train_inputs = train_inputs.to(device=args.device)
-        train_targets = train_targets.to(device=args.device)
-        train_embeddings = model(train_inputs)
-
-        test_inputs, test_targets = val_batch['test']
-        test_inputs = test_inputs.to(device=args.device)
-        test_targets = test_targets.to(device=args.device)
-        test_embeddings = model(test_inputs)
-
-        prototypes = get_prototypes(train_embeddings, train_targets,
-                                    val_dataset.num_classes_per_task)
-        acc = get_accuracy(prototypes, test_embeddings, test_targets).item()
-        accuracies.append(acc)
-
-        if val_step >= args.val_steps:
-          break
-
-      mean = 100 * np.mean(accuracies)
-      std = 100 * np.std(accuracies)
-      ci95 = 1.96 * std / np.sqrt(args.val_steps)
+      mean, ci95 = _evaluate(model, val_dataset, val, args.val_steps,
+                             args.device)
       print(f'Validation accuraccy = {mean:.2f} ± {ci95:.2f}%')
-
-      model.train(True)
 
   # Save model
   if args.output_folder is not None:
