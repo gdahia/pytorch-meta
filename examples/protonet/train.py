@@ -9,7 +9,7 @@ from torchmeta.datasets.helpers import omniglot
 from torchmeta.utils.data import BatchMetaDataLoader
 
 from model import PrototypicalNetwork
-from utils import get_prototypes, prototypical_loss, get_right
+from utils import get_prototypes, prototypical_loss, get_accuracy
 
 
 def _train(args):  # pylint: disable=too-many-locals,too-many-statements
@@ -57,7 +57,7 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
   optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
   # Training loop
-  for step, batch in enumerate(train):
+  for step, batch in enumerate(train, 1):
     model.zero_grad()
 
     train_inputs, train_targets = batch['train']
@@ -80,39 +80,37 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
     loss.backward()
     optimizer.step()
 
-    if (step + 1) % 10 == 0:
-      print(f'Step {step + 1}, loss = {loss.item()}')
+    if step % 10 == 0:
+      print(f'Step {step}, loss = {loss.item()}')
 
-    if (step + 1) % args.val_batches == 0:
+    if step % args.val_batches == 0:
       model.train(False)
 
+      # TODO: refactor validation into evaluation, receive a split (train, val, test), run on it
       accuracies = []
-      for _ in range(args.val_splits):
-        total = 0
-        right = 0
-        for val_step, val_batch in enumerate(val):
-          train_inputs, train_targets = val_batch['train']
-          train_inputs = train_inputs.to(device=args.device)
-          train_targets = train_targets.to(device=args.device)
-          train_embeddings = model(train_inputs)
+      for val_step, val_batch in enumerate(val, 1):
+        train_inputs, train_targets = val_batch['train']
+        train_inputs = train_inputs.to(device=args.device)
+        train_targets = train_targets.to(device=args.device)
+        train_embeddings = model(train_inputs)
 
-          test_inputs, test_targets = val_batch['test']
-          test_inputs = test_inputs.to(device=args.device)
-          test_targets = test_targets.to(device=args.device)
-          test_embeddings = model(test_inputs)
+        test_inputs, test_targets = val_batch['test']
+        test_inputs = test_inputs.to(device=args.device)
+        test_targets = test_targets.to(device=args.device)
+        test_embeddings = model(test_inputs)
 
-          prototypes = get_prototypes(train_embeddings, train_targets,
-                                      val_dataset.num_classes_per_task)
-          right += get_right(prototypes, test_embeddings, test_targets).item()
-          total += test_embeddings.shape[1]
+        prototypes = get_prototypes(train_embeddings, train_targets,
+                                    val_dataset.num_classes_per_task)
+        acc = get_accuracy(prototypes, test_embeddings, test_targets).item()
+        accuracies.append(acc)
 
-          if val_step > args.val_steps:
-            accuracies.append(right / total)
-            break
+        if val_step >= args.val_steps:
+          break
 
-      mean_acc = 100 * np.mean(accuracies)
-      std_acc = 100 * np.std(accuracies)
-      print(f'Validation accuraccy = {mean_acc:.2f}% (+/- {3*std_acc:.2f}%)')
+      mean = 100 * np.mean(accuracies)
+      std = 100 * np.std(accuracies)
+      ci95 = 1.96 * std / np.sqrt(args.val_steps)
+      print(f'Validation accuraccy = {mean:.2f} ± {ci95:.2f}%')
 
       model.train(True)
 
@@ -172,16 +170,12 @@ def _parse_args():
                       help='Number of tasks in a mini-batch of tasks.')
   parser.add_argument('--val-batches',
                       type=int,
-                      default=50,
+                      default=100,
                       help='Number of batches between validations.')
   parser.add_argument('--val-steps',
                       type=int,
                       default=100,
                       help='Number of validation steps.')
-  parser.add_argument('--val-splits',
-                      type=int,
-                      default=5,
-                      help='Number of validation splits.')
   parser.add_argument('--num-workers',
                       type=int,
                       default=1,
