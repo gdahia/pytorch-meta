@@ -135,7 +135,7 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
 
     if step % args.val_batches == 0:
       mean, ci95 = _evaluate(model, val_dataset.num_classes_per_task, val,
-                             args.val_steps, args.device)
+                             args.val_episodes, args.device)
       print(f'Validation accuraccy = {mean:.2f} ± {ci95:.2f}%')
 
       # early stopping
@@ -157,7 +157,7 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
   print('Testing...')
   model.load_state_dict(best_params)
   mean, ci95 = _evaluate(model, test_dataset.num_classes_per_task, test,
-                         args.test_steps, args.device)
+                         args.test_episodes, args.device)
   print(f'Final accuraccy = {mean:.2f} ± {ci95:.2f}%')
 
   # Save model
@@ -216,17 +216,16 @@ def _parse_args():
                       type=int,
                       default=100,
                       help='Number of batches between validations.')
-  parser.add_argument('--val-steps',
+  parser.add_argument('--val-episodes',
                       type=int,
                       default=100,
-                      help='Number of validation steps.')
+                      help='Number of validation episodes.')
   parser.add_argument(
-      '--test-steps',
+      '--test-episodes',
       type=int,
       default=10_000,
-      # TODO: replace steps here with episodes
       # TODO: improve episode batching to accelerate evaluation?
-      help='Number of test steps.')
+      help='Number of test episodes.')
   parser.add_argument('--patience',
                       type=float,
                       default=10,
