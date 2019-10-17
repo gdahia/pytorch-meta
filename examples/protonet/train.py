@@ -12,8 +12,7 @@ from model import PrototypicalNetwork
 from utils import get_prototypes, prototypical_loss, get_accuracy
 
 
-# TODO: remove getting dataset, get num_classes_per_task instead
-def _evaluate(model, dataset, dataloader, steps, device):
+def _evaluate(model, classes_per_task, dataloader, steps, device):
   model.train(False)
 
   accuracies = []
@@ -29,7 +28,7 @@ def _evaluate(model, dataset, dataloader, steps, device):
     test_embeddings = model(test_inputs)
 
     prototypes = get_prototypes(train_embeddings, train_targets,
-                                dataset.num_classes_per_task)
+                                classes_per_task)
     acc = get_accuracy(prototypes, test_embeddings, test_targets).item()
     accuracies.append(acc)
 
@@ -138,8 +137,8 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
       print(f'Step {step}, loss = {loss.item()}')
 
     if step % args.val_batches == 0:
-      mean, ci95 = _evaluate(model, val_dataset, val, args.val_steps,
-                             args.device)
+      mean, ci95 = _evaluate(model, val_dataset.num_classes_per_task, val,
+                             args.val_steps, args.device)
       print(f'Validation accuraccy = {mean:.2f} ± {ci95:.2f}%')
 
       # early stopping
@@ -160,8 +159,8 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
   # evaluate on test set
   print('Testing...')
   model.load_state_dict(best_params)
-  mean, ci95 = _evaluate(model, test_dataset, test, args.test_steps,
-                         args.device)
+  mean, ci95 = _evaluate(model, test_dataset.num_classes_per_task, test,
+                         args.test_steps, args.device)
   print(f'Final accuraccy = {mean:.2f} ± {ci95:.2f}%')
 
   # Save model
