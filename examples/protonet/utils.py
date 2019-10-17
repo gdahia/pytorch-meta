@@ -61,7 +61,7 @@ def prototypical_loss(prototypes, embeddings, targets):
         - embeddings.unsqueeze(1)) ** 2, dim=-1)
     return F.cross_entropy(-sq_distances, targets)
 
-def get_accuracy(prototypes, embeddings, targets):
+def get_accuracies(prototypes, embeddings, targets):
     """Compute the accuracy of the prototypical network on the test/query points.
 
     Parameters
@@ -84,4 +84,4 @@ def get_accuracy(prototypes, embeddings, targets):
     sq_distances = torch.sum((prototypes.unsqueeze(1)
         - embeddings.unsqueeze(2)) ** 2, dim=-1)
     _, predictions = torch.min(sq_distances, dim=-1)
-    return torch.mean(predictions.eq(targets).float())
+    return torch.mean(predictions.eq(targets).float(), dim=1)

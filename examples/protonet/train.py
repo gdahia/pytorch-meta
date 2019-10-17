@@ -9,14 +9,15 @@ from torchmeta.datasets.helpers import omniglot
 from torchmeta.utils.data import BatchMetaDataLoader
 
 from model import PrototypicalNetwork
-from utils import get_prototypes, prototypical_loss, get_accuracy
+from utils import get_prototypes, prototypical_loss, get_accuracies
 
 
-def _evaluate(model, classes_per_task, dataloader, steps, device):
+def _evaluate(model, classes_per_task, dataloader, total_episodes, device):
   model.train(False)
 
   accuracies = []
-  for step, batch in enumerate(dataloader, 1):
+  episodes_so_far = 0
+  for batch in dataloader:
     train_inputs, train_targets = batch['train']
     train_inputs = train_inputs.to(device=device)
     train_targets = train_targets.to(device=device)
@@ -29,17 +30,21 @@ def _evaluate(model, classes_per_task, dataloader, steps, device):
 
     prototypes = get_prototypes(train_embeddings, train_targets,
                                 classes_per_task)
-    acc = get_accuracy(prototypes, test_embeddings, test_targets).item()
-    accuracies.append(acc)
-
-    if step >= steps:
+    accs = get_accuracies(prototypes, test_embeddings,
+                          test_targets).detach().numpy()
+    if episodes_so_far + len(accs) < total_episodes:
+      accuracies.extend(accs)
+      episodes_so_far += len(accs)
+    else:
+      remaining = total_episodes - episodes_so_far
+      accuracies.extend(accs[:remaining])
       break
 
   model.train(True)
 
   mean = 100 * np.mean(accuracies)
   std = 100 * np.std(accuracies)
-  ci95 = 1.96 * std / np.sqrt(steps)
+  ci95 = 1.96 * std / np.sqrt(len(accuracies))
 
   return mean, ci95
 
@@ -74,9 +79,10 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
   )
   val = BatchMetaDataLoader(
       val_dataset,
-      batch_size=1,
+      batch_size=args.batch_size,
       shuffle=True,
       num_workers=args.num_workers,
+      drop_last=False,
   )
 
   # load test
@@ -91,9 +97,10 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
   )
   test = BatchMetaDataLoader(
       test_dataset,
-      batch_size=1,
+      batch_size=args.batch_size,
       shuffle=True,
       num_workers=args.num_workers,
+      drop_last=False,
   )
 
   model = PrototypicalNetwork(
@@ -220,12 +227,10 @@ def _parse_args():
                       type=int,
                       default=100,
                       help='Number of validation episodes.')
-  parser.add_argument(
-      '--test-episodes',
-      type=int,
-      default=10_000,
-      # TODO: improve episode batching to accelerate evaluation?
-      help='Number of test episodes.')
+  parser.add_argument('--test-episodes',
+                      type=int,
+                      default=10_000,
+                      help='Number of test episodes.')
   parser.add_argument('--patience',
                       type=float,
                       default=10,
