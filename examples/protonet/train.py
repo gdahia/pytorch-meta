@@ -121,9 +121,6 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
     test_inputs, test_targets = batch['test']
     test_inputs = test_inputs.to(device=args.device)
     test_targets = test_targets.to(device=args.device)
-    # model.train(False)
-    # test_embeddings = model(test_inputs)
-    # model.train(True)
     test_embeddings = model(test_inputs)
 
     prototypes = get_prototypes(train_embeddings, train_targets,
