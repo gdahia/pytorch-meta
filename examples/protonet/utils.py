@@ -23,17 +23,17 @@ def get_prototypes(embeddings, targets, num_classes):
         `(meta_batch_size, num_classes, embedding_size)`.
     """
     batch_size, embedding_size = embeddings.size(0), embeddings.size(-1)
+
+    embeddings_per_class = embeddings.view(batch_size, num_classes, -1, embedding_size)
+    prototypes = torch.mean(embeddings_per_class, dim=2)
+
     with torch.no_grad():
-        ones = torch.ones_like(targets, dtype=embeddings.dtype)
-        num_samples = embeddings.new_zeros((batch_size, num_classes))
-        num_samples.scatter_add_(1, targets, ones)
-        num_samples = num_samples.unsqueeze(-1)
-        num_samples = torch.max(num_samples, torch.ones_like(num_samples))
+      indices = targets.view(batch_size, num_classes, -1)
+      indices = indices[..., 0]
+      indices = torch.argsort(indices, dim=1)
+      indices = indices.unsqueeze(-1).expand_as(prototypes)
 
-    prototypes = embeddings.new_zeros((batch_size, num_classes, embedding_size))
-    indices = targets.unsqueeze(-1).expand_as(embeddings)
-    prototypes.scatter_add_(1, indices, embeddings).div_(num_samples)
-
+    prototypes = torch.gather(prototypes, 1, indices)
     return prototypes
 
 def prototypical_loss(prototypes, embeddings, targets):
