@@ -31,7 +31,7 @@ def _evaluate(model, classes_per_task, dataloader, total_episodes, device):
     prototypes = get_prototypes(train_embeddings, train_targets,
                                 classes_per_task)
     accs = get_accuracies(prototypes, test_embeddings,
-                          test_targets).detach().numpy()
+                          test_targets).cpu().detach().numpy()
     if episodes_so_far + len(accs) < total_episodes:
       accuracies.extend(accs)
       episodes_so_far += len(accs)
