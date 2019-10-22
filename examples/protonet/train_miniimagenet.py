@@ -110,7 +110,10 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
   )
   model.to(device=args.device)
   model.train()
-  optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+  optimizer = torch.optim.Adam(model.parameters(), lr=5e-3)
+  scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
+                                              step_size=2000,
+                                              gamma=0.5)
 
   # Training loop
   best_lb = 0
@@ -136,6 +139,7 @@ def _train(args):  # pylint: disable=too-many-locals,too-many-statements
 
     loss.backward()
     optimizer.step()
+    scheduler.step()
 
     if step % 10 == 0:
       print(f'Step {step}, loss = {loss.item()}')
@@ -233,7 +237,7 @@ def _parse_args():
                       help='Number of test episodes.')
   parser.add_argument('--patience',
                       type=float,
-                      default=10,
+                      default=20,
                       help='Early stopping patience.')
   parser.add_argument('--num-workers',
                       type=int,
